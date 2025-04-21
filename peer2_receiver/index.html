@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Receiver</title>
+    <style>
+        video {
+            width: 640px;
+            height: 480px;
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Receiver</h1>
+
+    <button id="connectButton">Connect Signaling Server</button>
+
+    <div>
+        <h2>Remote Video</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+
+    <script>
+        const signalingServerUrl = 'ws://localhost:8765';
+        let websocket;
+        let pc;
+        let currentSessionId = null;
+        const remoteVideoElement = document.getElementById('remoteVideo');
+
+        function connectSignalingServer() {
+            websocket = new WebSocket(signalingServerUrl);
+
+            websocket.onopen = () => {
+                console.log('Connected to signaling server');
+                const clientInfo = { client_type: 'viewer' };
+                websocket.send(JSON.stringify(clientInfo));
+            };
+
+            websocket.onmessage = async (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    console.log('Received message:', message);
+
+                    if (message.sdp) {
+                        console.log('Received SDP:', message);
+                        try {
+                            if (message.session_id) {
+                                currentSessionId = message.session_id;
+                                console.log('Session ID received:', currentSessionId);
+                            }
+
+                            const remoteDescription = new RTCSessionDescription({
+                                type: message.type,
+                                sdp: message.sdp
+                            });
+                            
+                            const isOffer = message.type === 'offer';
+                            await pc.setRemoteDescription(remoteDescription);
+                            console.log('Remote description set successfully:', pc.remoteDescription);
+
+                            if (isOffer) {
+                                console.log('Creating answer...');
+                                const answer = await pc.createAnswer();
+                                console.log('Local answer created:', answer);
+                                await pc.setLocalDescription(answer);
+                                console.log('Local description set successfully:', pc.localDescription);
+                                
+                                const answerMessage = {
+                                    type: 'answer',
+                                    sdp: pc.localDescription.sdp,
+                                    session_id: currentSessionId 
+                                };
+                                
+                                sendSignalingMessage(answerMessage);
+                            }
+                        } catch (error) {
+                            console.error('Error setting remote description or creating answer:', error);
+                        }
+                    } else if (message.candidate) {
+                        console.log('Received ICE candidate:', message);
+                        try {
+                            const candidate = new RTCIceCandidate({
+                                candidate: message.candidate,
+                                sdpMid: message.sdpMid,
+                                sdpMLineIndex: message.sdpMLineIndex
+                            });
+                            
+                            await pc.addIceCandidate(candidate);
+                            console.log('ICE candidate added successfully:', message);
+                        } catch (error) {
+                            console.error('Error adding remote candidate:', error);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error processing message from signaling server:', error);
+                }
+            };
+
+            websocket.onclose = () => {
+                console.log('Disconnected from signaling server');
+                cleanup();
+            };
+
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function sendSignalingMessage(message) {
+            if (message.candidate && currentSessionId) {
+                message.session_id = currentSessionId;
+            }
+            
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                console.log('Sending signaling message:', message);
+                websocket.send(JSON.stringify(message));
+            } else {
+                console.error('WebSocket not connected, cannot send message:', message);
+            }
+        }
+
+        async function startWebRTC() {
+            pc = new RTCPeerConnection({
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    // { urls: 'turn:127.0.0.1:3478', username: 'test', credential: 'test' }
+                ]
+            });
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    console.log('Local ICE candidate generated:', event.candidate);
+                    const candidateMessage = {
+                        candidate: event.candidate.candidate,
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex,
+                        session_id: currentSessionId 
+                    };
+                    sendSignalingMessage(candidateMessage);
+                }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                console.log('ICE connection state:', pc.iceConnectionState);
+                if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                    console.log('WebRTC connection established!');
+                } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
+                    console.log('WebRTC connection failed or closed.');
+                    cleanup();
+                }
+            };
+
+            pc.ontrack = (event) => {
+                console.log('Received remote track:', event.track);
+                console.log('Received event streams:', event.streams);
+                if (event.track && event.track.kind === 'video' && event.streams && event.streams.length > 0) {
+                    const remoteVideoElement = document.getElementById('remoteVideo');
+                    if (remoteVideoElement) {
+                        try {
+                            remoteVideoElement.srcObject = event.streams[0];
+                            const videoTracks = remoteVideoElement.srcObject.getVideoTracks();
+                            remoteVideoElement.play().catch(error => console.error('Error calling play():', error));
+                        } catch (error) {
+                            console.error('Error assigning stream to videoElement.srcObject:', error);
+                        }
+                    } else {
+                        console.log('remoteVideoElement not found!');
+                    }
+                } else {
+                    console.log('No video track or stream found in ontrack event.');
+                }
+            };
+
+            console.log('Waiting for offer...');
+        }
+
+        function cleanup() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.close();
+            }
+            const remoteVideoElement = document.getElementById('remoteVideo');
+            if (remoteVideoElement && remoteVideoElement.srcObject) {
+                remoteVideoElement.srcObject.getTracks().forEach(track => track.stop());
+                remoteVideoElement.srcObject = null;
+            }
+            currentSessionId = null;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const connectButton = document.getElementById('connectButton');
+            startWebRTC();
+            if (connectButton) {
+                connectButton.addEventListener('click', connectSignalingServer);
+            }
+        });
+    </script>
+</body>
+</html>
