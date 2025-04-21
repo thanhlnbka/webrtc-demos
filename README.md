@@ -32,7 +32,7 @@ webrtc-demos/
 ├── signal_server_1_n.py     # WebSocket signaling server (Python)
 ├── images/
 │   └── demo.gif             # Demo animation
-└── README.md                # This file
+└── README.md                
 ```
 
 ---
@@ -104,16 +104,20 @@ python3 -m http.server 8000
 
 ---
 
-## 🧪 Example GStreamer Pipeline
+## 🧪 Example GStreamer Pipeline Test For Sender
+ 
+In the peer1_sender folder, open main.cpp and replace the **pipeline_str** variable at line 436 with your custom GStreamer pipeline.
 
 ```cpp
-gst_parse_launch("videotestsrc ! x264enc tune=zerolatency ! rtph264pay config-interval=1 pt=96 ! appsink", nullptr);
+std::string pipeline_str =
+    "videotestsrc ! x264enc tune=zerolatency ! rtph264pay config-interval=1 pt=96 ! appsink name=appsink";
 ```
 
 Or using RTSP camera input:
 
 ```cpp
-gst_parse_launch("rtspsrc location=rtsp://... ! rtph264depay ! appsink", nullptr);
+std::string pipeline_str =
+    "rtspsrc location=rtsp://... ! rtph264depay ! appsink name=appsink";
 ```
 
 ---
